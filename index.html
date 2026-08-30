@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <script>
+      // Global error guard for window.fetch modification attempts and CSS color errors
+      (function() {
+        window.addEventListener('error', function(event) {
+          if (event.message && (
+            event.message.includes('fetch') || 
+            event.message.includes('oklch') ||
+            event.message.includes('oklab')
+          )) {
+            event.preventDefault();
+            console.warn('Recovered from:', event.message);
+          }
+        }, true);
+
+        try {
+          const originalFetch = window.fetch;
+          Object.defineProperty(window, 'fetch', {
+            get: function() { return originalFetch; },
+            set: function(v) { console.warn('Blocked attempt to overwrite window.fetch'); },
+            configurable: true
+          });
+        } catch (e) {}
+      })();
+    </script>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Khí Dung Pro - Hệ thống lập lịch Phun Khí Dung</title>
+    <meta name="description" content="Hệ thống quản lý và sắp xếp lịch phun khí dung thông minh cho bệnh viện." />
+    <meta property="og:title" content="Khí Dung Pro - Hệ thống lập lịch Phun Khí Dung" />
+    <meta property="og:description" content="Hệ thống quản lý và sắp xếp lịch phun khí dung thông minh cho bệnh viện." />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+
