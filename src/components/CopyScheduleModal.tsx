@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { getScheduleByDate, getYesterdayDate, saveScheduleByDate } from '../lib/dateStorage';
+import { getScheduleFromFirestore, saveScheduleToFirestore } from '../lib/firestoreService';
 import { Patient, TreatmentSession, Nurse, NURSES, scheduleTreatments } from '../lib/scheduler';
 import { format, parseISO } from 'date-fns';
 import { 
@@ -72,9 +73,25 @@ export const CopyScheduleModal: React.FC<CopyScheduleModalProps> = ({
   });
 
   // Load patient list from source date & check duplicates on target date
-  const loadSourceData = (sDate: string, tDate: string) => {
-    const sourceSchedule = getScheduleByDate(sDate);
-    const targetSchedule = getScheduleByDate(tDate);
+  const loadSourceData = async (sDate: string, tDate: string) => {
+    let sourceSchedule = getScheduleByDate(sDate);
+    let targetSchedule = getScheduleByDate(tDate);
+
+    // If missing from local storage, try fetching from Firestore
+    if (!sourceSchedule) {
+      try {
+        sourceSchedule = await getScheduleFromFirestore(sDate);
+      } catch (err) {
+        console.warn('Could not fetch source schedule from Firestore:', err);
+      }
+    }
+    if (!targetSchedule) {
+      try {
+        targetSchedule = await getScheduleFromFirestore(tDate);
+      } catch (err) {
+        console.warn('Could not fetch target schedule from Firestore:', err);
+      }
+    }
 
     const existingTargetPatients = targetSchedule ? targetSchedule.patients || [] : [];
     setTargetExistingPatients(existingTargetPatients);
@@ -222,8 +239,12 @@ export const CopyScheduleModal: React.FC<CopyScheduleModalProps> = ({
 
   // Confirm Official Schedule Creation
   const handleConfirmOfficialSave = () => {
+    const totalCount = totalPatientsInDept || previewPatients.length;
     // Save officially for target date in localStorage!
-    saveScheduleByDate(targetDate, previewPatients, previewSessions, totalPatientsInDept || previewPatients.length);
+    saveScheduleByDate(targetDate, previewPatients, previewSessions, totalCount);
+    // Also sync to Firestore!
+    saveScheduleToFirestore(targetDate, previewPatients, previewSessions, totalCount)
+      .catch(err => console.warn('Firestore sync failed in CopyScheduleModal:', err));
 
     // Show success view
     setStep('success');

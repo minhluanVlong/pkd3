@@ -1,0 +1,72 @@
+{
+  "entities": {
+    "DailySchedule": {
+      "title": "DailySchedule",
+      "description": "Lịch phân công phun khí dung theo ngày cho bệnh viện",
+      "type": "object",
+      "properties": {
+        "date": {
+          "type": "string",
+          "description": "Ngày định dạng YYYY-MM-DD",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+          "maxLength": 10
+        },
+        "patients": {
+          "type": "array",
+          "description": "Danh sách người bệnh"
+        },
+        "sessions": {
+          "type": "array",
+          "description": "Danh sách ca phun đã sắp xếp"
+        },
+        "totalPatients": {
+          "type": "number",
+          "description": "Tổng số bệnh nhân nội trú"
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "Thời gian cập nhật gần nhất"
+        },
+        "updatedBy": {
+          "type": "string",
+          "description": "Email hoặc UID người cập nhật"
+        }
+      },
+      "required": ["date", "patients", "sessions", "totalPatients", "updatedAt"]
+    },
+    "DepartmentConfig": {
+      "title": "DepartmentConfig",
+      "description": "Cấu hình danh mục máy và danh sách điều dưỡng của khoa",
+      "type": "object",
+      "properties": {
+        "machines": {
+          "type": "array",
+          "description": "Danh mục mã máy phun của khoa"
+        },
+        "nurses": {
+          "type": "array",
+          "description": "Danh sách điều dưỡng và mã máy phân công"
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "Thời gian cập nhật cấu hình"
+        },
+        "updatedBy": {
+          "type": "string",
+          "description": "Email hoặc UID người cập nhật"
+        }
+      },
+      "required": ["machines", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/schedules/{date}": {
+      "schema": "DailySchedule",
+      "description": "Lưu trữ lịch phân công theo từng ngày YYYY-MM-DD"
+    },
+    "/settings/department": {
+      "schema": "DepartmentConfig",
+      "description": "Cấu hình chung của khoa: danh mục mã máy và điều dưỡng"
+    }
+  }
+}

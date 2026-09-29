@@ -1,5 +1,6 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { getScheduleByDate, getAvailableDates, DailySchedule, convertPatientsToRawText } from '../lib/dateStorage';
+import { getScheduleFromFirestore, fetchAllAvailableDatesFromFirestore } from '../lib/firestoreService';
 import { TreatmentSession } from '../lib/scheduler';
 import { format, parseISO } from 'date-fns';
 import { 
@@ -51,12 +52,38 @@ export const HistoryModal: React.FC<HistoryModalProps> = ({
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [viewMode, setViewMode] = useState<'table' | 'rawText'>('table');
   const [copiedText, setCopiedText] = useState(false);
+  const [cloudDates, setCloudDates] = useState<string[]>([]);
+  const [isLoadingDate, setIsLoadingDate] = useState(false);
 
-  const availableDates = useMemo(() => getAvailableDates(), []);
+  useEffect(() => {
+    fetchAllAvailableDatesFromFirestore()
+      .then(dates => {
+        if (dates && dates.length > 0) {
+          setCloudDates(dates);
+        }
+      })
+      .catch(err => console.warn('Could not fetch cloud dates:', err));
+  }, []);
 
-  const handleSearchDate = (dateToSearch: string) => {
+  const availableDates = useMemo(() => {
+    const local = getAvailableDates();
+    const combined = Array.from(new Set([...local, ...cloudDates]));
+    return combined.sort((a, b) => b.localeCompare(a));
+  }, [cloudDates]);
+
+  const handleSearchDate = async (dateToSearch: string) => {
     setSelectedDate(dateToSearch);
-    const found = getScheduleByDate(dateToSearch);
+    let found = getScheduleByDate(dateToSearch);
+    if (!found) {
+      setIsLoadingDate(true);
+      try {
+        found = await getScheduleFromFirestore(dateToSearch);
+      } catch (err) {
+        console.warn('Firestore fetch failed:', err);
+      } finally {
+        setIsLoadingDate(false);
+      }
+    }
     setActiveSchedule(found);
   };
 

@@ -54,6 +54,14 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { useReactToPrint } from 'react-to-print';
 import * as XLSX from 'xlsx';
+import { 
+  saveScheduleToFirestore, 
+  subscribeToSchedule, 
+  saveDepartmentSettingsToFirestore, 
+  subscribeToDepartmentSettings,
+  getScheduleFromFirestore
+} from './lib/firestoreService';
+import { FirebaseSyncBar } from './components/FirebaseSyncBar';
 
 export default function App() {
   const [selectedDate, setSelectedDate] = useState<string>(() => format(new Date(), 'yyyy-MM-dd'));
@@ -65,6 +73,8 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [infoBanner, setInfoBanner] = useState<string | null>(null);
   const [departmentMachines, setDepartmentMachines] = useState<string[]>(() => getDepartmentMachines());
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
   const printRef = useRef<HTMLDivElement>(null);
 
   // Modals
@@ -80,7 +90,7 @@ export default function App() {
     documentTitle: `Lich_Phun_Khi_Dung_${selectedDate}`,
   });
 
-  // Load config & date schedule on mount or selectedDate change
+  // Load config & date schedule on mount or selectedDate change + Real-time Firestore sync
   useEffect(() => {
     const savedN = localStorage.getItem('hospital_nurses');
     const savedT = localStorage.getItem('hospital_total_patients');
@@ -88,7 +98,7 @@ export default function App() {
     if (savedN) setNurses(JSON.parse(savedN));
     if (savedT) setTotalPatients(parseInt(savedT));
 
-    // Load schedule for selectedDate
+    // Load initial local schedule for selectedDate
     const existing = getScheduleByDate(selectedDate);
     if (existing) {
       setPatients(existing.patients || []);
@@ -97,7 +107,36 @@ export default function App() {
       setPatients([]);
       setSessions([]);
     }
+
+    // Real-time Firestore listener for selected date
+    const unsubscribe = subscribeToSchedule(selectedDate, (cloudSchedule) => {
+      if (cloudSchedule) {
+        setPatients(cloudSchedule.patients || []);
+        setSessions(cloudSchedule.sessions || []);
+        if (cloudSchedule.totalPatients !== undefined) {
+          setTotalPatients(cloudSchedule.totalPatients);
+        }
+        setLastSyncedAt(cloudSchedule.updatedAt || new Date().toISOString());
+      }
+    });
+
+    return () => unsubscribe();
   }, [selectedDate]);
+
+  // Real-time Firestore listener for department settings (machines & nurses)
+  useEffect(() => {
+    const unsubscribe = subscribeToDepartmentSettings((data) => {
+      if (data.machines && data.machines.length > 0) {
+        setDepartmentMachines(data.machines);
+      }
+      if (data.nurses && data.nurses.length > 0) {
+        setNurses(data.nurses);
+      }
+      setLastSyncedAt(new Date().toISOString());
+    });
+
+    return () => unsubscribe();
+  }, []);
 
   const updateDataAndSave = (
     newPatients: Patient[], 
@@ -109,6 +148,13 @@ export default function App() {
     setPatients(newPatients);
     setSessions(generatedSessions);
     saveScheduleByDate(targetDate, newPatients, generatedSessions, currentTotal);
+    
+    // Cloud Firestore Sync
+    setIsSyncing(true);
+    saveScheduleToFirestore(targetDate, newPatients, generatedSessions, currentTotal)
+      .then(() => setLastSyncedAt(new Date().toISOString()))
+      .catch((err) => console.warn('Firestore sync schedule error:', err))
+      .finally(() => setIsSyncing(false));
   };
 
   const updateNurses = (newNurses: Nurse[]) => {
@@ -117,11 +163,45 @@ export default function App() {
     const updatedSessions = scheduleTreatments(patients, newNurses, totalPatients);
     setSessions(updatedSessions);
     saveScheduleByDate(selectedDate, patients, updatedSessions, totalPatients);
+    
+    // Cloud Firestore Sync
+    saveDepartmentSettingsToFirestore(departmentMachines, newNurses)
+      .then(() => setLastSyncedAt(new Date().toISOString()))
+      .catch((err) => console.warn('Firestore sync nurses error:', err));
   };
 
   const handleSaveMachines = (newMachines: string[]) => {
     setDepartmentMachines(newMachines);
     saveDepartmentMachines(newMachines);
+    
+    // Cloud Firestore Sync
+    saveDepartmentSettingsToFirestore(newMachines, nurses)
+      .then(() => setLastSyncedAt(new Date().toISOString()))
+      .catch((err) => console.warn('Firestore sync machines error:', err));
+  };
+
+  const handleManualSync = async () => {
+    setIsSyncing(true);
+    try {
+      const cloudSchedule = await getScheduleFromFirestore(selectedDate);
+      if (cloudSchedule) {
+        setPatients(cloudSchedule.patients || []);
+        setSessions(cloudSchedule.sessions || []);
+        if (cloudSchedule.totalPatients) setTotalPatients(cloudSchedule.totalPatients);
+        setInfoBanner(`Đã đồng bộ lịch ngày ${format(parseISO(selectedDate), 'dd/MM/yyyy')} từ Firebase Cloud.`);
+      } else {
+        if (patients.length > 0) {
+          await saveScheduleToFirestore(selectedDate, patients, sessions, totalPatients);
+          setInfoBanner('Đã tải lịch hiện tại lên Firebase Cloud.');
+        }
+      }
+      setLastSyncedAt(new Date().toISOString());
+    } catch (err) {
+      console.error('Manual sync failed:', err);
+    } finally {
+      setIsSyncing(false);
+      setTimeout(() => setInfoBanner(null), 5000);
+    }
   };
 
   const [showClearConfirm, setShowClearConfirm] = useState(false);
@@ -168,6 +248,9 @@ export default function App() {
     const updatedSessions = scheduleTreatments(patients, nurses, val);
     setSessions(updatedSessions);
     saveScheduleByDate(selectedDate, patients, updatedSessions, val);
+    saveScheduleToFirestore(selectedDate, patients, updatedSessions, val)
+      .then(() => setLastSyncedAt(new Date().toISOString()))
+      .catch(err => console.warn('Firestore sync count error:', err));
   };
 
   const handleBulkAdd = () => {
@@ -198,6 +281,9 @@ export default function App() {
       const generatedSessions = scheduleTreatments(newPs, nurses, totalPatients);
       setSessions(generatedSessions);
       saveScheduleByDate(selectedDate, newPs, generatedSessions, totalPatients);
+      saveScheduleToFirestore(selectedDate, newPs, generatedSessions, totalPatients)
+        .then(() => setLastSyncedAt(new Date().toISOString()))
+        .catch(err => console.warn('Firestore sync bulk error:', err));
       setBulkInput('');
       setIsLoading(false);
     }, 400);
@@ -423,6 +509,12 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#f3f6ff] text-slate-900 font-sans">
+      <FirebaseSyncBar
+        isSyncing={isSyncing}
+        lastSyncedAt={lastSyncedAt}
+        onManualSync={handleManualSync}
+      />
+
       {/* Header Section */}
       <div className="bg-gradient-to-r from-[#1e40af] to-[#3b82f6] pt-12 pb-24 no-print shadow-xl">
         <div className="max-w-[1400px] mx-auto px-6 text-center text-white">
@@ -654,6 +746,9 @@ export default function App() {
                           setPatients([]);
                           setSessions([]);
                           saveScheduleByDate(selectedDate, [], [], totalPatients);
+                          saveScheduleToFirestore(selectedDate, [], [], totalPatients)
+                            .then(() => setLastSyncedAt(new Date().toISOString()))
+                            .catch(err => console.warn('Firestore sync clear error:', err));
                           setShowClearConfirm(false);
                           setInfoBanner('Đã xóa toàn bộ danh sách người bệnh hiện tại.');
                           setTimeout(() => setInfoBanner(null), 4000);
