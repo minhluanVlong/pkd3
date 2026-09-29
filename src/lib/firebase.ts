@@ -63,9 +63,16 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
 export async function testConnection() {
   try {
     await getDocFromServer(doc(db, 'test', 'connection'));
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.error('Please check your Firebase configuration.');
+  } catch (error: any) {
+    if (
+      (error instanceof Error && error.message.includes('the client is offline')) ||
+      error?.code === 'unavailable' ||
+      error?.message?.includes('could not be completed')
+    ) {
+      // The client is operating in offline mode or network is connecting; local cache is active
+      console.warn('Firestore is connecting or operating in offline mode. Local cache active.');
+    } else {
+      console.warn('Firestore connection check notice:', error?.message || error);
     }
   }
 }

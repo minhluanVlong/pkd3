@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { Cloud, CloudCheck, LogIn, LogOut, User as UserIcon, RefreshCw } from 'lucide-react';
+import { Cloud, CloudOff, LogIn, LogOut, User as UserIcon, RefreshCw, AlertCircle, X } from 'lucide-react';
 
 interface FirebaseSyncBarProps {
   isSyncing?: boolean;
@@ -13,8 +13,20 @@ export const FirebaseSyncBar: React.FC<FirebaseSyncBarProps> = ({
   lastSyncedAt,
   onManualSync
 }) => {
-  const { user, loading, signInWithGoogle, logout } = useAuth();
+  const { user, loading, authError, clearAuthError, signInWithGoogle, logout } = useAuth();
   const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const [isOnline, setIsOnline] = useState<boolean>(() => typeof navigator !== 'undefined' ? navigator.onLine : true);
+
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
 
   const handleLogin = async () => {
     setIsLoggingIn(true);
@@ -28,12 +40,19 @@ export const FirebaseSyncBar: React.FC<FirebaseSyncBarProps> = ({
   return (
     <div className="bg-white/80 backdrop-blur-md border-b border-blue-100/80 px-4 py-2 text-xs flex flex-wrap items-center justify-between gap-3 shadow-xs">
       {/* Cloud status */}
-      <div className="flex items-center gap-2">
-        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 font-bold border border-emerald-200">
-          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-          <Cloud size={13} className="text-emerald-600" />
-          <span>Firebase Cloud: Đã kết nối (asia-southeast1)</span>
-        </span>
+      <div className="flex items-center gap-2 flex-wrap">
+        {isOnline ? (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 font-bold border border-emerald-200">
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+            <Cloud size={13} className="text-emerald-600" />
+            <span>Firebase Cloud: Đã kết nối (asia-southeast1)</span>
+          </span>
+        ) : (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-50 text-amber-800 font-bold border border-amber-200">
+            <CloudOff size={13} className="text-amber-600" />
+            <span>Chế độ ngoại tuyến (Dữ liệu lưu an toàn trên máy)</span>
+          </span>
+        )}
 
         {lastSyncedAt && (
           <span className="text-[11px] text-slate-500 hidden sm:inline">
@@ -50,8 +69,23 @@ export const FirebaseSyncBar: React.FC<FirebaseSyncBarProps> = ({
             title="Đồng bộ lại với Firebase Cloud"
           >
             <RefreshCw size={12} className={isSyncing ? 'animate-spin' : ''} />
-            <span className="hidden md:inline">Làm mới Cloud</span>
+            <span className="hidden md:inline">{isSyncing ? 'Đang đồng bộ...' : 'Làm mới Cloud'}</span>
           </button>
+        )}
+
+        {authError && (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg bg-red-50 text-red-700 text-[11px] border border-red-200">
+            <AlertCircle size={12} className="text-red-500 shrink-0" />
+            <span>{authError}</span>
+            <button
+              type="button"
+              onClick={clearAuthError}
+              className="p-0.5 hover:bg-red-100 rounded text-red-500 cursor-pointer"
+              title="Đóng thông báo"
+            >
+              <X size={12} />
+            </button>
+          </span>
         )}
       </div>
 
@@ -92,7 +126,7 @@ export const FirebaseSyncBar: React.FC<FirebaseSyncBarProps> = ({
             className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold transition-all shadow-xs cursor-pointer active:scale-95"
           >
             <LogIn size={13} />
-            <span>Đăng nhập Google</span>
+            <span>{isLoggingIn ? 'Đang mở đăng nhập...' : 'Đăng nhập Google'}</span>
           </button>
         )}
       </div>

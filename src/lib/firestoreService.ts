@@ -98,8 +98,12 @@ export function subscribeToSchedule(
       saveScheduleByDate(schedule.date, schedule.patients, schedule.sessions, schedule.totalPatients);
       onUpdate(schedule);
     },
-    (error) => {
-      handleFirestoreError(error, OperationType.GET, path);
+    (error: any) => {
+      if (error?.code === 'permission-denied' || error?.message?.includes('permission')) {
+        handleFirestoreError(error, OperationType.GET, path);
+      } else {
+        console.warn(`Firestore schedule subscription offline notice for ${path}:`, error?.message || error);
+      }
     }
   );
 }
@@ -159,8 +163,12 @@ export function subscribeToDepartmentSettings(
         nurses: data.nurses,
       });
     },
-    (error) => {
-      handleFirestoreError(error, OperationType.GET, path);
+    (error: any) => {
+      if (error?.code === 'permission-denied' || error?.message?.includes('permission')) {
+        handleFirestoreError(error, OperationType.GET, path);
+      } else {
+        console.warn(`Firestore settings subscription offline notice for ${path}:`, error?.message || error);
+      }
     }
   );
 }
