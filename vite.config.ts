@@ -4,8 +4,13 @@ import path from 'path';
 import {defineConfig} from 'vite';
 
 export default defineConfig(() => {
+  // Use /pkd3/ base only when building inside GitHub Actions for GitHub Pages.
+  // In Cloud Run, AI Studio, and local dev, use root '/' base.
+  const isGitHubActions = process.env.GITHUB_ACTIONS === 'true';
+  const base = process.env.BASE_URL || (isGitHubActions ? '/pkd3/' : '/');
+
   return {
-    base:'/pkd3/',
+    base,
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {
