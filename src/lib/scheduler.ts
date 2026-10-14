@@ -101,8 +101,8 @@ export function scheduleTreatments(patients: Patient[], customNurses: Nurse[] = 
         const gapHours = patient.times === 2 ? 12 : 8;
         sessionStartTime = addHours(patientSessions[0].startTime, gapHours);
       } else {
-        // Lần 3 = giờ bắt đầu lần 2 + 7 giờ
-        sessionStartTime = addHours(patientSessions[1].startTime, 7);
+        // Lần 3 = giờ bắt đầu lần 2 + 8 giờ (theo y lệnh + 8 phút, không tự động giảm 1h)
+        sessionStartTime = addHours(patientSessions[1].startTime, 8);
       }
 
       let sessionEndTime = addMinutes(sessionStartTime, TREATMENT_DURATION);

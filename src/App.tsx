@@ -98,9 +98,17 @@ export default function App() {
     if (savedN) setNurses(JSON.parse(savedN));
     if (savedT) setTotalPatients(parseInt(savedT));
 
+    const currentNursesList = savedN ? JSON.parse(savedN) : nurses;
+    const currentTotalNum = savedT ? parseInt(savedT) : totalPatients;
+
     // Load initial local schedule for selectedDate
     const existing = getScheduleByDate(selectedDate);
-    if (existing) {
+    if (existing && existing.patients && existing.patients.length > 0) {
+      setPatients(existing.patients);
+      // Recalculate with new formula so session 3 reflects order time + 8 minutes without -1h reduction
+      const freshSessions = scheduleTreatments(existing.patients, currentNursesList, existing.totalPatients ?? currentTotalNum);
+      setSessions(freshSessions);
+    } else if (existing) {
       setPatients(existing.patients || []);
       setSessions(existing.sessions || []);
     } else {
@@ -112,7 +120,12 @@ export default function App() {
     const unsubscribe = subscribeToSchedule(selectedDate, (cloudSchedule) => {
       if (cloudSchedule) {
         setPatients(cloudSchedule.patients || []);
-        setSessions(cloudSchedule.sessions || []);
+        if (cloudSchedule.patients && cloudSchedule.patients.length > 0) {
+          const fresh = scheduleTreatments(cloudSchedule.patients, currentNursesList, cloudSchedule.totalPatients ?? currentTotalNum);
+          setSessions(fresh);
+        } else {
+          setSessions(cloudSchedule.sessions || []);
+        }
         if (cloudSchedule.totalPatients !== undefined) {
           setTotalPatients(cloudSchedule.totalPatients);
         }
