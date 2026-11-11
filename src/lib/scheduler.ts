@@ -61,25 +61,14 @@ export function scheduleTreatments(patients: Patient[], customNurses: Nurse[] = 
   const activeNurses = participantCount >= 30 ? customNurses : customNurses.slice(0, 2);
   const sessions: TreatmentSession[] = [];
 
-  // Track availability per nurse/machine
-  // We can use the endTime + gap as the next available slot
-  // But since we have multiple sessions per patient and they can overlap across days,
-  // we need a more robust check.
-
-  const isSlotAvailable = (start: Date, end: Date, nurseId: string) => {
-    return !sessions.some(s => {
-      if (s.nurseId !== nurseId) return false;
-      // Check overlap: (StartA < EndB) and (EndA > StartB)
-      // We add the gap to the check
-      const bufferStart = addMinutes(s.startTime, -SESSION_GAP);
-      const bufferEnd = addMinutes(s.endTime, SESSION_GAP);
-      return (start < bufferEnd) && (end > bufferStart);
-    });
-  };
+  // Track sessions by nurse for fast O(1) lookup
+  const nurseSessionsMap = new Map<string, TreatmentSession[]>();
+  activeNurses.forEach(n => nurseSessionsMap.set(n.id, []));
 
   sortedPatients.forEach((patient, index) => {
     // 1. Assign Nurse (Round-robin based on index for the first session)
     const nurse = activeNurses[index % activeNurses.length];
+    const assignedNurseSessions = nurseSessionsMap.get(nurse.id) || [];
 
     // 2. Generate Sessions
     const patientSessions: TreatmentSession[] = [];
@@ -107,10 +96,28 @@ export function scheduleTreatments(patients: Patient[], customNurses: Nurse[] = 
 
       let sessionEndTime = addMinutes(sessionStartTime, TREATMENT_DURATION);
 
-      // 3. Resolve Conflicts
-      while (!isSlotAvailable(sessionStartTime, sessionEndTime, nurse.id)) {
-        sessionStartTime = addMinutes(sessionStartTime, 1);
+      // 3. Fast Conflict Resolution: Jump directly to the end of conflicting session + gap
+      let attempts = 0;
+      while (attempts < 500) {
+        const startMs = sessionStartTime.getTime();
+        const endMs = sessionEndTime.getTime();
+        const gapMs = SESSION_GAP * 60 * 1000;
+
+        // Find if any existing session for this nurse conflicts
+        const conflict = assignedNurseSessions.find(s => {
+          const sStartMs = s.startTime.getTime();
+          const sEndMs = s.endTime.getTime();
+          return (startMs < sEndMs + gapMs) && (endMs > sStartMs - gapMs);
+        });
+
+        if (!conflict) {
+          break; // Slot is free!
+        }
+
+        // Jump directly to the earliest available moment after the conflicting session
+        sessionStartTime = addMinutes(conflict.endTime, SESSION_GAP);
         sessionEndTime = addMinutes(sessionStartTime, TREATMENT_DURATION);
+        attempts++;
       }
 
       const session: TreatmentSession = {
@@ -129,6 +136,7 @@ export function scheduleTreatments(patients: Patient[], customNurses: Nurse[] = 
       };
 
       patientSessions.push(session);
+      assignedNurseSessions.push(session);
       sessions.push(session);
     }
   });

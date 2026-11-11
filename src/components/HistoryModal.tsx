@@ -137,13 +137,12 @@ export const HistoryModal: React.FC<HistoryModalProps> = ({
   }, [activeSchedule, searchTerm]);
 
   const safeFormatTime = (d: Date | string) => {
-    try {
-      const dateObj = typeof d === 'string' ? new Date(d) : d;
-      if (isNaN(dateObj.getTime())) return '--:--';
-      return format(dateObj, 'HH:mm');
-    } catch {
-      return '--:--';
-    }
+    if (!d) return '--:--';
+    const dateObj = typeof d === 'string' ? new Date(d) : d;
+    if (isNaN(dateObj.getTime())) return '--:--';
+    const hours = String(dateObj.getHours()).padStart(2, '0');
+    const minutes = String(dateObj.getMinutes()).padStart(2, '0');
+    return `${hours}:${minutes}`;
   };
 
   // Export Excel

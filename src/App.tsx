@@ -76,6 +76,9 @@ export default function App() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
   const printRef = useRef<HTMLDivElement>(null);
+  const syncScheduleTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const syncDepartmentTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const isLocalMutationRef = useRef<boolean>(false);
 
   // Modals
   const [showHistoryModal, setShowHistoryModal] = useState(false);
@@ -89,6 +92,56 @@ export default function App() {
     contentRef: printRef,
     documentTitle: `Lich_Phun_Khi_Dung_${selectedDate}`,
   });
+
+  // Cleanup pending sync timeouts on unmount
+  useEffect(() => {
+    return () => {
+      if (syncScheduleTimeoutRef.current) clearTimeout(syncScheduleTimeoutRef.current);
+      if (syncDepartmentTimeoutRef.current) clearTimeout(syncDepartmentTimeoutRef.current);
+    };
+  }, []);
+
+  // Debounced cloud sync for schedule
+  const queueScheduleCloudSync = (
+    dateStr: string,
+    pts: Patient[],
+    sess: TreatmentSession[],
+    total: number,
+    delayMs = 600
+  ) => {
+    isLocalMutationRef.current = true;
+    if (syncScheduleTimeoutRef.current) {
+      clearTimeout(syncScheduleTimeoutRef.current);
+    }
+    syncScheduleTimeoutRef.current = setTimeout(() => {
+      setIsSyncing(true);
+      saveScheduleToFirestore(dateStr, pts, sess, total)
+        .then(() => setLastSyncedAt(new Date().toISOString()))
+        .catch((err) => console.warn('Firestore sync schedule error:', err))
+        .finally(() => {
+          setIsSyncing(false);
+          setTimeout(() => {
+            isLocalMutationRef.current = false;
+          }, 800);
+        });
+    }, delayMs);
+  };
+
+  // Debounced cloud sync for department settings (machines & nurses)
+  const queueDepartmentCloudSync = (
+    machs: string[],
+    nurs: Nurse[],
+    delayMs = 700
+  ) => {
+    if (syncDepartmentTimeoutRef.current) {
+      clearTimeout(syncDepartmentTimeoutRef.current);
+    }
+    syncDepartmentTimeoutRef.current = setTimeout(() => {
+      saveDepartmentSettingsToFirestore(machs, nurs)
+        .then(() => setLastSyncedAt(new Date().toISOString()))
+        .catch((err) => console.warn('Firestore sync department error:', err));
+    }, delayMs);
+  };
 
   // Load config & date schedule on mount or selectedDate change + Real-time Firestore sync
   useEffect(() => {
@@ -105,7 +158,6 @@ export default function App() {
     const existing = getScheduleByDate(selectedDate);
     if (existing && existing.patients && existing.patients.length > 0) {
       setPatients(existing.patients);
-      // Recalculate with new formula so session 3 reflects order time + 8 minutes without -1h reduction
       const freshSessions = scheduleTreatments(existing.patients, currentNursesList, existing.totalPatients ?? currentTotalNum);
       setSessions(freshSessions);
     } else if (existing) {
@@ -118,6 +170,14 @@ export default function App() {
 
     // Real-time Firestore listener for selected date
     const unsubscribe = subscribeToSchedule(selectedDate, (cloudSchedule) => {
+      // Avoid echo loop if local user is actively editing
+      if (isLocalMutationRef.current) {
+        if (cloudSchedule?.updatedAt) {
+          setLastSyncedAt(cloudSchedule.updatedAt);
+        }
+        return;
+      }
+
       if (cloudSchedule) {
         setPatients(cloudSchedule.patients || []);
         if (cloudSchedule.patients && cloudSchedule.patients.length > 0) {
@@ -162,12 +222,22 @@ export default function App() {
     setSessions(generatedSessions);
     saveScheduleByDate(targetDate, newPatients, generatedSessions, currentTotal);
     
-    // Cloud Firestore Sync
-    setIsSyncing(true);
-    saveScheduleToFirestore(targetDate, newPatients, generatedSessions, currentTotal)
-      .then(() => setLastSyncedAt(new Date().toISOString()))
-      .catch((err) => console.warn('Firestore sync schedule error:', err))
-      .finally(() => setIsSyncing(false));
+    // Cloud Firestore Sync (debounced to keep UI snappy)
+    queueScheduleCloudSync(targetDate, newPatients, generatedSessions, currentTotal, 200);
+  };
+
+  const updateNurseName = (idx: number, newName: string) => {
+    const newNurses = [...nurses];
+    const targetId = newNurses[idx].id;
+    newNurses[idx] = { ...newNurses[idx], name: newName };
+    setNurses(newNurses);
+    localStorage.setItem('hospital_nurses', JSON.stringify(newNurses));
+    
+    // In-memory update for displayed sessions without heavy re-scheduling
+    setSessions(prev => prev.map(s => s.nurseId === targetId ? { ...s, nurseName: newName } : s));
+    
+    // Debounce cloud write
+    queueDepartmentCloudSync(departmentMachines, newNurses, 700);
   };
 
   const updateNurses = (newNurses: Nurse[]) => {
@@ -177,20 +247,16 @@ export default function App() {
     setSessions(updatedSessions);
     saveScheduleByDate(selectedDate, patients, updatedSessions, totalPatients);
     
-    // Cloud Firestore Sync
-    saveDepartmentSettingsToFirestore(departmentMachines, newNurses)
-      .then(() => setLastSyncedAt(new Date().toISOString()))
-      .catch((err) => console.warn('Firestore sync nurses error:', err));
+    // Cloud Firestore Sync (debounced)
+    queueDepartmentCloudSync(departmentMachines, newNurses, 400);
   };
 
   const handleSaveMachines = (newMachines: string[]) => {
     setDepartmentMachines(newMachines);
     saveDepartmentMachines(newMachines);
     
-    // Cloud Firestore Sync
-    saveDepartmentSettingsToFirestore(newMachines, nurses)
-      .then(() => setLastSyncedAt(new Date().toISOString()))
-      .catch((err) => console.warn('Firestore sync machines error:', err));
+    // Cloud Firestore Sync (debounced)
+    queueDepartmentCloudSync(newMachines, nurses, 300);
   };
 
   const handleManualSync = async () => {
@@ -221,7 +287,7 @@ export default function App() {
 
   const handleNurseMachineChange = (nurseIndex: number, newCode: string) => {
     const updated = [...nurses];
-    updated[nurseIndex].machineCode = newCode;
+    updated[nurseIndex] = { ...updated[nurseIndex], machineCode: newCode };
     updateNurses(updated);
   };
 
@@ -258,19 +324,21 @@ export default function App() {
   const updateTotalPatients = (val: number) => {
     setTotalPatients(val);
     localStorage.setItem('hospital_total_patients', val.toString());
+    
+    // Instant local schedule re-evaluation (<5ms)
     const updatedSessions = scheduleTreatments(patients, nurses, val);
     setSessions(updatedSessions);
     saveScheduleByDate(selectedDate, patients, updatedSessions, val);
-    saveScheduleToFirestore(selectedDate, patients, updatedSessions, val)
-      .then(() => setLastSyncedAt(new Date().toISOString()))
-      .catch(err => console.warn('Firestore sync count error:', err));
+    
+    // Debounce cloud write to eliminate typing lag
+    queueScheduleCloudSync(selectedDate, patients, updatedSessions, val, 600);
   };
 
   const handleBulkAdd = () => {
     if (!bulkInput.trim()) return;
-    setIsLoading(true);
     
     const lines = bulkInput.trim().split('\n').filter(l => l.trim());
+    if (lines.length === 0) return;
     
     const newPs: Patient[] = lines.map((line, idx) => {
       const parts = line.split(/[,-]/).map(p => p.trim());
@@ -288,27 +356,31 @@ export default function App() {
       };
     });
 
+    // Instant local schedule generation with no delay
+    const generatedSessions = scheduleTreatments(newPs, nurses, totalPatients);
     setPatients(newPs);
+    setSessions(generatedSessions);
+    saveScheduleByDate(selectedDate, newPs, generatedSessions, totalPatients);
     
-    setTimeout(() => {
-      const generatedSessions = scheduleTreatments(newPs, nurses, totalPatients);
-      setSessions(generatedSessions);
-      saveScheduleByDate(selectedDate, newPs, generatedSessions, totalPatients);
-      saveScheduleToFirestore(selectedDate, newPs, generatedSessions, totalPatients)
-        .then(() => setLastSyncedAt(new Date().toISOString()))
-        .catch(err => console.warn('Firestore sync bulk error:', err));
-      setBulkInput('');
-      setIsLoading(false);
-    }, 400);
+    // Fast cloud sync in background
+    queueScheduleCloudSync(selectedDate, newPs, generatedSessions, totalPatients, 100);
+    setBulkInput('');
+    setInfoBanner(`Đã tạo lịch phân công cho ${newPs.length} bệnh nhân.`);
+    setTimeout(() => setInfoBanner(null), 4000);
   };
 
   const safeFormat = (date: any, fmt: string) => {
+    if (!date) return '--:--';
+    const d = date instanceof Date ? date : new Date(date);
+    if (isNaN(d.getTime())) return '--:--';
+    if (fmt === 'HH:mm') {
+      const hours = String(d.getHours()).padStart(2, '0');
+      const minutes = String(d.getMinutes()).padStart(2, '0');
+      return `${hours}:${minutes}`;
+    }
     try {
-      if (!date) return '--:--';
-      const d = new Date(date);
-      if (isNaN(d.getTime())) return '--:--';
       return format(d, fmt);
-    } catch (e) {
+    } catch {
       return '--:--';
     }
   };
@@ -500,7 +572,7 @@ export default function App() {
     });
   }, [sessions]);
 
-  const getMachineColor = (code: string) => {
+  const getMachineColor = useMemo(() => {
     const colorMap: Record<string, string> = {
       '032': '#3b82f6',
       '121': '#a855f7',
@@ -511,14 +583,21 @@ export default function App() {
       '004': '#06b6d4',
       '005': '#f97316',
     };
-    if (colorMap[code]) return colorMap[code];
-    let hash = 0;
-    for (let i = 0; i < code.length; i++) {
-      hash = code.charCodeAt(i) + ((hash << 5) - hash);
-    }
-    const colors = ['#3b82f6', '#a855f7', '#ec4899', '#ef4444', '#f59e0b', '#10b981', '#06b6d4', '#f97316'];
-    return colors[Math.abs(hash) % colors.length];
-  };
+    const cache = new Map<string, string>();
+    return (code: string) => {
+      if (colorMap[code]) return colorMap[code];
+      const hit = cache.get(code);
+      if (hit) return hit;
+      let hash = 0;
+      for (let i = 0; i < code.length; i++) {
+        hash = code.charCodeAt(i) + ((hash << 5) - hash);
+      }
+      const colors = ['#3b82f6', '#a855f7', '#ec4899', '#ef4444', '#f59e0b', '#10b981', '#06b6d4', '#f97316'];
+      const res = colors[Math.abs(hash) % colors.length];
+      cache.set(code, res);
+      return res;
+    };
+  }, []);
 
   return (
     <div className="min-h-screen bg-[#f3f6ff] text-slate-900 font-sans">
@@ -609,11 +688,7 @@ export default function App() {
                       <input 
                         type="text" 
                         value={nurse.name}
-                        onChange={(e) => {
-                          const newNurses = [...nurses];
-                          newNurses[idx].name = e.target.value;
-                          updateNurses(newNurses);
-                        }}
+                        onChange={(e) => updateNurseName(idx, e.target.value)}
                         className="flex-1 bg-white border border-slate-200 rounded-xl px-3.5 py-2 font-bold text-sm outline-none focus:ring-2 ring-blue-500/20 text-slate-800"
                         placeholder="Nhập tên ĐD..."
                       />
@@ -888,7 +963,7 @@ export default function App() {
                       </tr>
                     ) : (
                       sortedSessions.map((s, idx) => (
-                        <tr key={idx} className="group hover:scale-[1.01] transition-transform duration-200">
+                        <tr key={s.id || `${s.patientId}-${s.sessionOrder}`} className="group hover:bg-blue-50/40 transition-colors">
                           <td className="bg-slate-50/50 rounded-l-[1.5rem] px-1 py-6 text-center font-bold text-slate-400 tabular-nums">
                             {idx + 1}
                           </td>
